@@ -3,20 +3,27 @@ import time
 import cv2 as cv
 import numpy as np
 
+from itertools import repeat
+
+from multiprocessing import Pool
+
+
 #HSV (0-179, 0-255, 0-255)
 outer_border_color = (177, 138, 211)
 outer_border_error = (10, 80, 80)
 
-inner_border_color = (112, 109, 141)
-inner_border_error = (10, 40, 40)
+inner_border_color = (100, 100, 100)
+inner_border_error = (20, 80, 80)
 
 
 def hsv_in_bounds(value, correct, error):
-    h = min(abs(value[0] - correct[0]), 180-abs(value[0] - correct[0])) <= error[0] \
-        or correct[1] == 0 or correct[2] == 0
-    s = abs(value[1] - correct[1]) <= error[1]
-    v = abs(value[2] - correct[2]) <= error[2]
-    return h and s and v
+    # s and v and h
+    return (
+        abs(value[1] - correct[1]) <= error[1] and
+        abs(value[2] - correct[2]) <= error[2] and
+        (min(abs(value[0] - correct[0]), 180-abs(value[0] - correct[0])) <= error[0] or
+         correct[1] == 0 or correct[2] == 0)
+    )
 
 
 def analyse_column(hsv_image, column_index):
@@ -48,31 +55,19 @@ def analyse_column(hsv_image, column_index):
                 #print("end", pixel)
                 break
 
-    return [inner_border_start, border_center, outer_border_end]
+    return [inner_border_start, border_center, outer_border_end, column_index]
 
 
-def find_edges(image):
+def find_edges(image, step=1):
     hsv_img = cv.cvtColor(image, cv.COLOR_BGR2HSV)
+    image_width = np.shape(hsv_img)[1]
+    indexes = range(0, image_width, step)
 
-    print(hsv_img[0][0], hsv_img[19][0],
-          hsv_in_bounds(hsv_img[0][0], outer_border_color, outer_border_error),
-          hsv_in_bounds(hsv_img[19][0], inner_border_color, inner_border_error))
+    # The parallel version is slower for now
+    #with Pool() as pool:
+        #return pool.starmap(analyse_column, zip(repeat(hsv_img), indexes))
 
-    borders = []
-
-    for i in range(np.shape(hsv_img)[1]):
-        borders.append(analyse_column(hsv_img, i))
-        #print(i, borders[i])
-        image[borders[i][0]][i] = (255, 0, 0)
-        image[borders[i][1]][i] = (0, 255, 0)
-        image[borders[i][2]][i] = (0, 0, 255)
-
-    print("done")
-
-    cv.imshow('edges', image)
-    cv.waitKey(0)
-
-    print(np.shape(image))
+    return list(map(lambda i: analyse_column(hsv_img, i), indexes))
 
 """
 cv.drawContours(image, contours, -1, (0, 255, 0), 3)
@@ -80,8 +75,45 @@ cv.drawContours(image, contours, -1, (0, 255, 0), 3)
             cv.waitKey(0)
             """
 
+
+def find_thresholds(path):
+    global outer_border_color, outer_border_error, inner_border_color, inner_border_error
+
+    image = cv.imread(path)
+
+    title_window = "Find thresholds"
+    cv.namedWindow(title_window)
+
+    def render_borders():
+        start = time.time()
+        edges = find_edges(image, 1)
+        end_analysis = time.time()
+        #print('\nanalysis time:', (end_analysis - start) * 1000, 'ms', (end_analysis - start) ** -1, 'fps')
+
+        image_copy = image.copy()
+
+        for inner, border, outer, i in edges:
+            image_copy[inner][i] = (255, 0, 0)
+            image_copy[border][i] = (0, 255, 0)
+            image_copy[outer][i] = (0, 0, 255)
+
+        cv.imshow(title_window, image_copy)
+
+    print("outer_border_color outer_border_error inner_border_color inner_border_error")
+    print(outer_border_color, outer_border_error, inner_border_color, inner_border_error)
+
+    while True:
+        render_borders()
+        cv.waitKey(1)
+        try:
+            tuple_strings = input("new values: ").replace(' ', '').replace('(', '').split(")")
+            tuple_strings.pop()
+            value_strings = list(map(lambda x: x.split(','), tuple_strings))
+            tuples = [[int(y) for y in x] for x in value_strings]
+            outer_border_color, outer_border_error, inner_border_color, inner_border_error = tuples
+        except:
+            print("Bad input")
+
+
 if __name__ == "__main__":
-    start = time.time()
-    print(find_edges(cv.imread("tests/test9.jpeg")))
-    end = time.time()
-    print('\nanalysis time:', (end - start) * 1000, 'ms', (end - start) ** -1, 'fps')
+    find_thresholds("tests/test9.jpeg")
