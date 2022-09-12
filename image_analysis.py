@@ -84,8 +84,8 @@ def edge_error(points, column, index0, index1):
     x1 = points[index1][0]
     y1 = points[index1][column]
     line = lambda x: (y1 - y0) / (x1 - x0) * (x - x1) + y1
-    distance = lambda point: abs(point[column] - line(point[0]))/len(points)
-    return sum(map(distance, itertools.islice(points, index0, index1)))
+    distance = lambda point: (abs(point[column] - line(point[0])))**2
+    return sum(map(distance, itertools.islice(points, index0, index1)))/len(points)
 
 def remove_obvious_outliers(points, column, image_width, region_size=40, min_population=4, linear_threshold=0.5):
     #horizontal = np.empty(image_width, dtype=object)
@@ -123,40 +123,30 @@ def remove_obvious_outliers(points, column, image_width, region_size=40, min_pop
     return list(filter(lambda p: p[0] not in to_be_removed, points))
 
 
-
-
-def split_by_corners(points, column, image_width, half_chunk=4, linear_threshold=0.9):
+def split_by_corner(points, column):
     xs = [point[0] for point in points]
     ys = [point[column] for point in points]
 
-    chunk_size = 2*half_chunk + 1
-    chunks = [(i, abs(np.corrcoef(xs[i:i+chunk_size+1], ys[i:i+chunk_size+1])[1, 0])) for i in range(len(points)-chunk_size+1)]
-    chunks.sort(key=lambda chunk: chunk[1])
-    print(chunks)
+    corner_index = -1
+    min_combined_error = math.inf
 
-    def split_index(chunk_index):
-        return chunk_index + half_chunk
+    for i in range(3, len(points)-2):
+        #error_l = edge_error(points[:i], 2, 0, i-1)
+        #error_r = edge_error(points[i:], 2, 0, len(points)-i-1)
+        #combined_coef = abs(np.corrcoef(xs[:i], ys[:i])[1, 0]) + abs(np.corrcoef(xs[i:], ys[i:])[1, 0])
+        poly_l, data_l = np.polynomial.polynomial.Polynomial.fit(xs[:i], ys[:i], 1, full=True)
+        poly_r, data_r = np.polynomial.polynomial.Polynomial.fit(xs[i:], ys[i:], 1, full=True)
 
-    corner1 = chunks.pop(0)
-    if corner1[1] > linear_threshold:
-        print("No corners", corner1[1])
-        return [points]
+        combined_error = data_l[0][0] + data_r[0][0]
 
-    split_1 = split_index(corner1[0])
-    if points[corner1[0]][0] < image_width/2:
-        for chunk in chunks:
-            if chunk[1] > linear_threshold:
-                break
+        if combined_error < min_combined_error:
+            min_combined_error = combined_error
+            corner_index = i
 
-            x = points[chunk[0]][0]
-            if x >= image_width:
-                print("Two corners")
-                split_2 = split_index(corner1[1])
+    return points[:corner_index], points[corner_index:]
 
-                return [points[:split_1], points[split_1:split_2], points[split_2:]]
 
-    print("One corner")
-    return [points[:split_1], points[split_1:]]
+
 
 
 """
@@ -178,14 +168,14 @@ def find_thresholds(path):
         start = time.time()
         edge_points = clean_edge_points(find_edge_points(image, 4))
         clean_points = remove_obvious_outliers(edge_points, 2, np.shape(image)[1])
-        split_points = split_by_corners(clean_points, 2, np.shape(image)[1])
+        split_points = split_by_corner(clean_points, 2)
         end_analysis = time.time()
 
         print('\nanalysis time:', (end_analysis - start) * 1000, 'ms', (end_analysis - start) ** -1, 'fps')
 
-        #image_copy = image.copy()
-        image_copy = np.zeros(np.shape(image), dtype=np.uint8)
-        image_copy.fill(0)
+        image_copy = image.copy()
+        #image_copy = np.zeros(np.shape(image), dtype=np.uint8)
+        #image_copy.fill(0)
         #for x, inner, center, outer in edge_points:
             #image_copy[inner][x] = (0, 255, 0)
             #image_copy[center][x] = (255, 0, 0)
@@ -220,4 +210,4 @@ def find_thresholds(path):
 
 
 if __name__ == "__main__":
-    find_thresholds("tests/cam2.jpeg")
+    find_thresholds("tests/test9.jpeg")
