@@ -1,3 +1,4 @@
+import functools
 import itertools
 import time
 from functools import reduce
@@ -85,35 +86,38 @@ def edge_error(points, column, index0, index1):
     return sum(map(distance, itertools.islice(points, index0, index1)))
 
 
-def find_corners(points, column, half_chunk=2):
-    chunk = 2*half_chunk + 1
+def split_by_corners(points, column, image_width, half_chunk=2, max_r=0.8):
+    chunk_size = 2*half_chunk + 1
     xs = [point[0] for point in points]
     ys = [point[column] for point in points]
 
-    smallest_coefficient = 1
-    corner1_index = -1
+    chunks = [(i, abs(np.corrcoef(xs[i:i+chunk_size+1], ys[i:i+chunk_size+1])[1,0])) for i in range(len(points)-chunk_size+1)]
+    chunks.sort(key=lambda chunk: chunk[1])
+    print(chunks)
 
-    second_smallest_coefficient = 1
-    corner2_index = -1
+    def split_index(chunk_index):
+        return chunk_index + half_chunk
 
-    for i in range(len(points)-chunk+1):
-        coef = abs(np.corrcoef(xs[i:i+chunk], ys[i:i+chunk])[1,0])
-        print(xs[i:i+chunk], ys[i:i+chunk])
-        print(coef)
+    corner1 = chunks.pop(0)
+    if corner1[1] > max_r:
+        print("No corners")
+        return [points]
 
-        if coef < smallest_coefficient:
-            second_smallest_coefficient = smallest_coefficient
-            corner2_index = corner1_index
-            smallest_coefficient = coef
-            corner1_index = i + half_chunk
-        elif coef < second_smallest_coefficient:
-            second_smallest_coefficient = coef
-            corner2_index = i + half_chunk
+    split_1 = split_index(corner1[0])
+    if points[corner1[0]][0] < image_width/2:
+        for chunk in chunks:
+            if chunk[1] > max_r:
+                break
 
-    print(smallest_coefficient, second_smallest_coefficient)
+            x = points[chunk[0]][0]
+            if x >= image_width:
+                print("Two corners")
+                split_2 = split_index(corner1[1])
 
-    return corner1_index, corner2_index
+                return [points[:split_1], points[split_1:split_2], points[split_2:]]
 
+    print("One corner")
+    return [points[:split_1], points[split_1:]]
 
 
 """
@@ -134,26 +138,24 @@ def find_thresholds(path):
     def render_borders():
         start = time.time()
         edge_points = clean_edge_points(find_edge_points(image, 4))
-        corner_indexes = find_corners(edge_points, 2)
+        split_points = split_by_corners(edge_points, 2, np.shape(image)[1])
         end_analysis = time.time()
 
         print('\nanalysis time:', (end_analysis - start) * 1000, 'ms', (end_analysis - start) ** -1, 'fps')
 
-        print("edge error ", edge_error(edge_points, 2, 0, 20), edge_error(edge_points, 2, 20, len(edge_points)-1))
-
-        image_copy = image.copy()
-
-
-        for x, inner, center, outer in edge_points:
+        #image_copy = image.copy()
+        image_copy = np.zeros(np.shape(image), dtype=np.uint8)
+        image_copy.fill(0)
+        #for x, inner, center, outer in edge_points:
             #image_copy[inner][x] = (0, 255, 0)
-            image_copy[center][x] = (255, 0, 0)
+            #image_copy[center][x] = (255, 0, 0)
             #image_copy[outer][x] = (0, 0, 255)
 
-
-        print("corners", corner_indexes)
-        if corner_indexes[0] != -1:
-            corner_point = edge_points[corner_indexes[0]]
-            image_copy[corner_point[2]][corner_point[0]] = (0, 255, 0)
+        for i, points in enumerate(split_points):
+            color = [0, 0, 0]
+            color[i] = 255
+            for x, inner, center, outer in points:
+                image_copy[center][x] = color
 
         cv.imshow(title_window, image_copy)
 
@@ -174,4 +176,4 @@ def find_thresholds(path):
 
 
 if __name__ == "__main__":
-    find_thresholds("tests/test9.jpeg")
+    find_thresholds("tests/cam2.jpeg")
