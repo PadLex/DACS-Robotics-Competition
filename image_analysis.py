@@ -9,15 +9,16 @@ from sklearn.cluster import DBSCAN
 
 import cv2 as cv
 import numpy as np
+from numpy.polynomial.polynomial import Polynomial
 from scipy.spatial import KDTree
 
 
 # HSV (0-179, 0-255, 0-255)
 outer_border_color = (177, 138, 211)
-outer_border_error = (10, 80, 80)
+outer_border_error = (10, 60, 60)
 
 inner_border_color = (99, 120, 100)
-inner_border_error = (20, 80, 80)
+inner_border_error = (20, 70, 70)
 
 
 def hsv_in_bounds(value, correct, error):
@@ -77,16 +78,6 @@ def find_edge_points(image, step=1):
 def clean_edge_points(points):
     return list(filter(lambda point: -1 not in point, points))
 
-
-def edge_error(points, column, index0, index1):
-    x0 = points[index0][0]
-    y0 = points[index0][column]
-    x1 = points[index1][0]
-    y1 = points[index1][column]
-    line = lambda x: (y1 - y0) / (x1 - x0) * (x - x1) + y1
-    distance = lambda point: (abs(point[column] - line(point[0])))**2
-    return sum(map(distance, itertools.islice(points, index0, index1)))/len(points)
-
 def remove_obvious_outliers(points, column, image_width, region_size=40, min_population=4, linear_threshold=0.5):
     #horizontal = np.empty(image_width, dtype=object)
     horizontal = [None for _ in range(image_width)]
@@ -123,27 +114,28 @@ def remove_obvious_outliers(points, column, image_width, region_size=40, min_pop
     return list(filter(lambda p: p[0] not in to_be_removed, points))
 
 
-def split_by_corner(points, column):
+def get_lines(points, column, derivative_threshold=0.5):
     xs = [point[0] for point in points]
     ys = [point[column] for point in points]
 
-    corner_index = -1
+    polynomials = ()
     min_combined_error = math.inf
 
     for i in range(3, len(points)-2):
-        #error_l = edge_error(points[:i], 2, 0, i-1)
-        #error_r = edge_error(points[i:], 2, 0, len(points)-i-1)
-        #combined_coef = abs(np.corrcoef(xs[:i], ys[:i])[1, 0]) + abs(np.corrcoef(xs[i:], ys[i:])[1, 0])
-        poly_l, data_l = np.polynomial.polynomial.Polynomial.fit(xs[:i], ys[:i], 1, full=True)
-        poly_r, data_r = np.polynomial.polynomial.Polynomial.fit(xs[i:], ys[i:], 1, full=True)
+        poly_l, data_l = Polynomial.fit(xs[:i], ys[:i], 1, full=True)
+        poly_r, data_r = Polynomial.fit(xs[i:], ys[i:], 1, full=True)
 
         combined_error = data_l[0][0] + data_r[0][0]
 
         if combined_error < min_combined_error:
             min_combined_error = combined_error
-            corner_index = i
+            polynomials = (poly_l, poly_r)
 
-    return points[:corner_index], points[corner_index:]
+    print("deriv", polynomials[0].deriv()(0) - polynomials[1].deriv()(0))
+    if abs(polynomials[0].deriv()(0) - polynomials[1].deriv()(0)) < derivative_threshold:
+        return (Polynomial.fit(xs, ys, 1), )
+
+    return polynomials
 
 
 
@@ -168,7 +160,12 @@ def find_thresholds(path):
         start = time.time()
         edge_points = clean_edge_points(find_edge_points(image, 4))
         clean_points = remove_obvious_outliers(edge_points, 2, np.shape(image)[1])
-        split_points = split_by_corner(clean_points, 2)
+        if len(clean_points) < 4:
+            print("Not enough clean points")
+            return
+        center_lines = get_lines(clean_points, 2)
+        outer_lines = get_lines(clean_points, 3)
+
         end_analysis = time.time()
 
         print('\nanalysis time:', (end_analysis - start) * 1000, 'ms', (end_analysis - start) ** -1, 'fps')
@@ -176,20 +173,24 @@ def find_thresholds(path):
         image_copy = image.copy()
         #image_copy = np.zeros(np.shape(image), dtype=np.uint8)
         #image_copy.fill(0)
-        #for x, inner, center, outer in edge_points:
-            #image_copy[inner][x] = (0, 255, 0)
-            #image_copy[center][x] = (255, 0, 0)
-            #image_copy[outer][x] = (0, 0, 255)
 
         for x, inner, center, outer in edge_points:
-            image_copy[center][x] = (150, 150, 150)
+            image_copy[outer][x] = (0, 255, 0)
 
-        for i, points in enumerate(split_points):
-            color = [0, 0, 0]
-            color[i] = 255
-            for x, inner, center, outer in points:
-                image_copy[center][x] = color
+        for x, inner, center, outer in clean_points:
+            image_copy[outer][x] = (255, 255, 255)
 
+        for line in center_lines:
+            for x in range(np.shape(image_copy)[1]):
+                y = round(line(x))
+                if 0 <= y < np.shape(image_copy)[0]:
+                    image_copy[y][x] = (255, 0, 0)
+
+        for line in outer_lines:
+            for x in range(np.shape(image_copy)[1]):
+                y = round(line(x))
+                if 0 <= y < np.shape(image_copy)[0]:
+                    image_copy[y][x] = (0, 0, 255)
 
         cv.imshow(title_window, image_copy)
 
@@ -210,4 +211,4 @@ def find_thresholds(path):
 
 
 if __name__ == "__main__":
-    find_thresholds("tests/test9.jpeg")
+    find_thresholds("tests/test4.jpeg")
