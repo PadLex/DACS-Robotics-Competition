@@ -4,6 +4,8 @@ import time
 from functools import reduce
 import math
 from multiprocessing import Pool
+from sklearn.cluster import DBSCAN
+
 
 import cv2 as cv
 import numpy as np
@@ -85,13 +87,50 @@ def edge_error(points, column, index0, index1):
     distance = lambda point: abs(point[column] - line(point[0]))/len(points)
     return sum(map(distance, itertools.islice(points, index0, index1)))
 
+def remove_obvious_outliers(points, column, image_width, region_size=40, min_population=4, linear_threshold=0.5):
+    #horizontal = np.empty(image_width, dtype=object)
+    horizontal = [None for _ in range(image_width)]
+    for point in points:
+        horizontal[point[0]] = point
 
-def split_by_corners(points, column, image_width, half_chunk=2, max_r=0.8):
-    chunk_size = 2*half_chunk + 1
+    to_be_removed = set()
+
+    left_len = int(region_size/2)
+    right_len = round(region_size/2)
+
+    for current_point in points:
+        center_x = current_point[0]
+        neighbourhood = horizontal[max(0, center_x-left_len):min(image_width-1, center_x+right_len)]
+        neighbourhood = list(filter(lambda n: n is not None, neighbourhood))
+
+        """
+        neighbours_left = horizontal[max(0, center_x-region_size):center_x]
+        neighbours_left = list(filter(lambda n: n is not None, neighbours_left))
+        neighbours_right = horizontal[center_x, min(image_width - 1, center_x + region_size)]
+        neighbours_right.pop(0)
+        neighbours_right = list(filter(lambda n: n is not None, neighbours_right))
+        """
+
+        if len(neighbourhood) < min_population:
+            to_be_removed.add(center_x)
+
+        xs = [point[0] for point in neighbourhood]
+        ys = [point[column] for point in neighbourhood]
+        if abs(np.corrcoef(xs, ys)[1, 0]) < linear_threshold:
+            for neighbour in neighbourhood:
+                to_be_removed.add(neighbour[0])
+
+    return list(filter(lambda p: p[0] not in to_be_removed, points))
+
+
+
+
+def split_by_corners(points, column, image_width, half_chunk=4, linear_threshold=0.9):
     xs = [point[0] for point in points]
     ys = [point[column] for point in points]
 
-    chunks = [(i, abs(np.corrcoef(xs[i:i+chunk_size+1], ys[i:i+chunk_size+1])[1,0])) for i in range(len(points)-chunk_size+1)]
+    chunk_size = 2*half_chunk + 1
+    chunks = [(i, abs(np.corrcoef(xs[i:i+chunk_size+1], ys[i:i+chunk_size+1])[1, 0])) for i in range(len(points)-chunk_size+1)]
     chunks.sort(key=lambda chunk: chunk[1])
     print(chunks)
 
@@ -99,14 +138,14 @@ def split_by_corners(points, column, image_width, half_chunk=2, max_r=0.8):
         return chunk_index + half_chunk
 
     corner1 = chunks.pop(0)
-    if corner1[1] > max_r:
-        print("No corners")
+    if corner1[1] > linear_threshold:
+        print("No corners", corner1[1])
         return [points]
 
     split_1 = split_index(corner1[0])
     if points[corner1[0]][0] < image_width/2:
         for chunk in chunks:
-            if chunk[1] > max_r:
+            if chunk[1] > linear_threshold:
                 break
 
             x = points[chunk[0]][0]
@@ -138,7 +177,8 @@ def find_thresholds(path):
     def render_borders():
         start = time.time()
         edge_points = clean_edge_points(find_edge_points(image, 4))
-        split_points = split_by_corners(edge_points, 2, np.shape(image)[1])
+        clean_points = remove_obvious_outliers(edge_points, 2, np.shape(image)[1])
+        split_points = split_by_corners(clean_points, 2, np.shape(image)[1])
         end_analysis = time.time()
 
         print('\nanalysis time:', (end_analysis - start) * 1000, 'ms', (end_analysis - start) ** -1, 'fps')
@@ -151,11 +191,15 @@ def find_thresholds(path):
             #image_copy[center][x] = (255, 0, 0)
             #image_copy[outer][x] = (0, 0, 255)
 
+        for x, inner, center, outer in edge_points:
+            image_copy[center][x] = (150, 150, 150)
+
         for i, points in enumerate(split_points):
             color = [0, 0, 0]
             color[i] = 255
             for x, inner, center, outer in points:
                 image_copy[center][x] = color
+
 
         cv.imshow(title_window, image_copy)
 
